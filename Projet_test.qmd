@@ -1,0 +1,100 @@
+```{r}
+#Package pacman installe et charge les packages mêmes s'ils ne sont pas dans notre environement de développement.
+if(!require(pacman)) install.packages('pacaman')
+
+pacman::p_load(pacman, readr, lubridate, tseries, forecast, tidyverse, plotly,lmtest,car)
+```
+
+```{r}
+ data_Poland <- read.csv("Poland.csv")
+
+ 
+ colnames(data_Poland)[4] = 'Date_local'
+ colnames(data_Poland)[3] = 'Date_UTC'
+ colnames(data_Poland)[5] = 'Prix'
+ 
+ data_Poland$Date_local = ymd_hms(data_Poland$Date_local)
+ head(data_Poland)
+ 
+```
+
+```{r}
+monthly_data_Poland = aggregate(data_Poland$Prix,by = list(Date_local=format(data_Poland$Date_local,"%Y-%m-%d")),FUN = sum)
+
+colnames(monthly_data_Poland)[2] = "Prix"
+
+monthly_data_Poland$Date_local = ymd(monthly_data_Poland$Date_local)
+
+monthly_data_Poland
+```
+
+```{r}
+graphe <- ggplot(data = monthly_data_Poland, aes(x = Date_local, y = Prix)) +
+  geom_line(color='red') +
+  theme_minimal() +
+  labs(title = "Evolution du prix de l'electricité", x = "Temps", y = "Prix (Euro/Mwhe)") +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "1 year") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),plot.title = element_text(hjust = 0.5))
+
+#Convertir en graphique plotly pour l'interactivité
+ggplotly(graphe)
+```
+
+```{r}
+monthly_data_Poland_ts = ts(monthly_data_Poland$Prix,start=c(year(min(monthly_data_Poland$Date_local)),month(min(monthly_data_Poland$Date_local)),day(min(monthly_data_Poland$Date_local))),frequency = 7)
+
+plot(decompose(monthly_data_Poland_ts))
+```
+
+```{r}
+acf_1 = acf(monthly_data_Poland_ts,plot=FALSE)
+
+acf_1$lag = acf_1$lag*7
+
+plot(acf_1,ylim = c(-1,1))
+```
+
+```{r}
+monthly_data_Poland_ts_dif_1 = diff(monthly_data_Poland_ts,lag=1,differences = 1)
+
+acf_2 = acf(na.omit(monthly_data_Poland_ts_dif_1),plot = FALSE)
+
+acf_2$lag = acf_2$lag*7
+
+plot(acf_2,ylim = c(-1,1))
+
+pacf_2 = pacf(na.omit(monthly_data_Poland_ts_dif_1),plot = FALSE)
+plot(pacf_2,ylim = c(-1,1))
+
+plot(monthly_data_Poland_ts_dif_1)
+```
+
+Le corrélogramme de cette différence prmière revèle la presence de pic significatif dans la fonction d'autocorrélation à la fois au retard 7, 14, 21, ... autrement dit des retard de multiple de 7. Ce qui nous renseigne sur une présence de saisonnalité qu'on vas éliminer en faisant appel à un filtre de différence saisonnière
+
+```{r}
+monthly_data_Poland_ts_dif_2 = diff(monthly_data_Poland_ts_dif_1,lag=7,differences = 1)
+
+acf_2 = acf(na.omit(monthly_data_Poland_ts_dif_2),plot = FALSE)
+
+acf_2$lag = acf_2$lag*7
+
+plot(acf_2,ylim = c(-1,1))
+
+pacf_2 = pacf(na.omit(monthly_data_Poland_ts_dif_2),plot = FALSE)
+plot(pacf_2,ylim = c(-1,1))
+
+plot(monthly_data_Poland_ts_dif_2)
+```
+
+```{r}
+model = Arima(monthly_data_Poland_ts,order = c(2,1,2),seasonal = list(order = c(2,1,2),period=7))
+
+summary(model)
+
+acf(model$residuals)
+```
+
+```{r}
+model_1 = auto.arima(monthly_data_Poland_ts)
+summary(model_1)
+```

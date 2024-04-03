@@ -1,0 +1,29 @@
+---
+title: "Projet 2024"
+format: html
+editor: visual
+---
+
+**Instructions:**
+
+-   Le projet est a remettre sur moodle au format RMD our QMD.
+-   La présentation sera prise en compte dans la note.
+-   Des points seront retirés si le fichier envoyé ne compile pas.
+-   On justifiera les modèles choisis et si besoins les hypothèses.
+-   Le rendu doit être compréhensible par une personne n'ayant pas lu l'énoncé.
+
+**Datasets disponibles:**
+
+-   *energy-consumption-by-source-and-country.csv* contient la consomation d'énergie de chaque pays pour differentes sources d'énergies. Il ne s'agit pas que de l'électricité mais de la consomation globale.
+-   *population-and-demography.csv* contient les données démographiques de nombreux pays.
+-   Le *répertoire european_wholesale_electricity_price_data_hourly* contient un fichier par pays contenant les prix de l'électricité heure par heure.
+-   *death-rate-from-air-pollution-per-100000.csv* contient le nombre de morts du à la pollution de l'air pour 100000 habitants par pays et par an.
+
+## I) Prix de l'électricité
+
+1.  Créer un modèle de série temporelle pour le prix de l'électricité. On expliquera si possible les variations saisonnières et la tendance.
+2.  Faire une prévision du prix de l'électricité pour l'année 2024.
+
+## II) Consomation d'énergie et pollution
+
+Donner un modèle liant la mortatilité due à la pollution de l'air et la consomation par habitant de different type d'énergie. Commenter les résultats ainsi que la fiabilité du modèle.
