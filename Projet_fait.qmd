@@ -1,6 +1,6 @@
 ---
-title: "_Projet Statistique avec R_ <br><br>
-         &nbsp;&nbsp;&nbsp;ABOTSI Kossi Tonyi Wobubey"
+title: "_Projet Statistique avec R_"
+author: "ABOTSI Kossi Tonyi Wobubey"
 format: html
 editor: visual
 ---
@@ -14,7 +14,7 @@ pacman::p_load(pacman, readr, lubridate, tseries, forecast, tidyverse, plotly,lm
 
 ## Exercice I :
 
-### 1) Identification du model (p, d et q)
+### 1) Identification du model
 
 #### Imporation des données
 
@@ -47,13 +47,13 @@ ggplotly(graphe)
 
 Sur notre graphe on remarque que globalement notre tendance (Prix de l'électricité) ne varie pas trop de 2015 à 2020 et augmente considérablement entre 2021 et 2023 année à partir duquel on remarque une chute jusqu'au prix habituel. Cette augmentation globale du prix de l'électricité entre 2021 et 2023 peut être du en parti au COVID-19 et aussi la guerre entre la Russie et l'ukraine(2022 première année de guerre avec un pic maximal de 771 euro par megawattheure).
 
-#### Stationnarisation de notre Série 
+#### Stationnarisation de notre Série
 
-Avant de choisir un model (ARMA ou autre model), la question qu'on se pose est de savoir si notre serie est stationnaire. En effet on prefère faire des prévisions avec une serie stationnaire car elle est plus stable (moyenne , variance, autocorrélogragramme ... sont constante).
+Avant de choisir un model (ARMA ou autre model), la question qu'on se pose est de savoir si notre serie est stationnaire. En effet on prefère modeliser des series stationnaires car elles sont plus stable (moyenne , variance, autocorrélogragramme ... sont constante).
 
-Notre série observé ci dessous n'est clairement pas stationnaire car elle présente une tendance qui augmente puis diminue légèrement.. On observe également une forte variation des amplitudes. On passe au log pour stabiliser un peu sa variance.
+Sur notre série observé ci dessous on peut avoir des doutes sur sa stationnarité car elle présente une tendance qui augmente puis diminue légèrement.. On observe également une forte variation des amplitudes. On passe au log pour stabiliser un peu sa variabilité.
 
-Comme il y des valeurs négative dans notre série temporelle je vais ajouter la valeur absolue du minimum de la valeur prise par cette série et plus 1 pour eviter les valeurs nulles.
+Comme il y des valeurs négatives dans notre série temporelle je vais ajouter la valeur absolue du minimum de la valeur prise par cette série et plus 1 pour eviter les valeurs nulles.
 
 ```{r}
 data_Poland_additive = data_Poland
@@ -73,16 +73,15 @@ graphe_2=ggplot(data = data_Poland_additive, aes(x = Date_local, y = log(Prix_tr
 ggplotly(graphe_2)
 ```
 
-Pour rendre notre série stationnaire nous devons la différencié pour éliminer la tendance et saisonnalité s'il y en a.
+On ne remarque pas un grand changement qui peut nous conduire à la stationnaité de cette série.
 
-Pour confirmé que notre n'est pas stationnaire on peut afficher l'autocorrélogramme simple de ma série.
+Analysons la sortie acf de notre série.
 
 ```{r}
 #Convertion de mes données en série temporelle
 data_Poland_ts = ts(data=data_Poland_additive$Prix,start = c(year(min(data_Poland_additive$Date_local)),month(min(data_Poland_additive$Date_local)),day(min(data_Poland_additive$Date_local)),hour(min(data_Poland_additive$Date_local))))
-```
 
-```{r}
+
 acf_1 = acf(na.omit(data_Poland_ts),plot = FALSE)
 
 plot(acf_1,ylim = c(-1,1))
@@ -92,9 +91,20 @@ plot(acf_1,ylim = c(-1,1))
 
 On constate ici que la décroissance de cette sortie acf est très très lente. Donc on peut conclure que notre serie n'est pas stationnaire.
 
-On utilise un test pour vérifier la stationnarité.....
+Pour confirmé ou infirmé mon intution que j'ai eu avec l'analyse visuel je fais le test de ***Dikey fuller pour la stationnarité***
 
-Cette lente décroissance nous incite à différencier une fois. On effectue une différenciation à l'ordre1 nous obtenons donc la série **(I-B)log(Xt)**.
+**H0 : Il n'y a pas de racine unitaire**
+
+**H1 : Il y a présence de racine unitaire**
+
+```{r}
+test_res = adf.test(data_Poland_ts)
+test_res
+```
+
+Pour rendre notre série stationnaire nous devons la différencié pour éliminer la tendance et saisonnalitée.
+
+On effectue une différenciation à l'ordre1 nous obtenons donc la série **(I-B)log(Xt)**.
 
 On obtient le graphique suivant :
 
@@ -116,7 +126,14 @@ plot(pacf_2,ylim = c(-1,1))
 
 Sur notre sortie acf on remarque une decroissance rapide vers 0 mais malheuresement il y a des pic tous les 24, 48, ... .
 
-Donc cette sortie acf ne correspond pas à celle d'une série stationnaire. Et comme se sont les pics d'odre 24 qui sont élevés nous allons effectué une différentiation d'ordre 12 nous obtenons donc la série **(I-B\^24)(I-B)log(Xt)**.
+Effectuons un test de stationnarité ......
+
+```{r}
+test_res = adf.test(data_Poland_ts_dif_1)
+test_res
+```
+
+Donc cette sortie acf ne correspond pas à celle d'une série stationnaire. Et comme se sont les pics d'odre 24 qui sont élevés nous allons effectué une différentiation d'ordre 24 nous obtenons donc la série **(I-B\^24)(I-B)log(Xt)**.
 
 ```{r}
 data_Poland_ts_dif_24 = diff(data_Poland_ts_dif_1,lag=24,differences = 1)
@@ -138,6 +155,13 @@ plot(pacf_3,ylim = c(-1,1))
 Cette sortie acf de la série doublement différencié semble pouvoir être interpreté comme une sortie acf d'une série stationnaire car nous n'observons pas la même décroissance lente que nous avions précédemment.
 
 Donc notre série doublement différencié **(I-B\^24)(I-B)log(Xt)** peut être potentiellement considéré comme une série stationnaire.
+
+```{r}
+test_res = adf.test(data_Poland_ts_dif_24)
+test_res
+```
+
+On identifiera alors un modèle ARMA sur la série **(I-B)(I-B\^24)log(Xt).**
 
 #### Identification de model :
 
@@ -161,42 +185,9 @@ acf(model$residuals)
 ```
 
 ```{r}
-t_stat
-```
+model = Arima(data_Poland_ts,order = c(2,1,2),seasonal = list(order = c(2,1,2),period=24),include.mean = FALSE,method = "CSS-ML")
 
-La sortie ACF de la série différenciée présente encore une décroissance lente vers 0 pour les multiples de 24.
+summary(model)
 
-On effectue une différentiaion **(I-B\^24)**
-
-```{r}
-data_Poland_ts_dif_24 = diff(data_Poland_ts_dif_1,lag=24,differences = 1)
-acf_3 = acf(na.omit(data_Poland_ts_dif_24),plot = FALSE)
-
-acf_3$lag = acf_3$lag * 24
-
-plot(acf_3,ylim = c(-1,1))
-
-plot(data_Poland_ts_dif_24)
-```
-
-On ne remarque plus la decroissance lente observé sur les deux figures précédentes. La sortie ACF de la série doublement différenciée semble pouvoir être interpretée comme un autocorrélogramme simple empirique.
-
-La serie temporelle doublement différencié est potentiellement stationnaire.
-
-En ce qui concerne notre autocorrélogramme partiel empirique on a :
-
-```{r}
-pacf_3 = pacf(na.omit(data_Poland_ts_dif_24),plot = FALSE)
-
-pacf_3$lag = pacf_3$lag * 24
-
-plot(pacf_3,ylim = c(-1,1))
-```
-
-On identifiera alors un modèle ARMA sur la série **(I-B)(I-B\^24)Xt**.
-
-```{r}
-model1 = Arima(data_Poland_ts,order = c(4,1,4),seasonal = list(order = c(4,1,4),period=24*365),include.mean = FALSE,method = "CSS-ML")
-
-summary(model1)
+acf(model$residuals)
 ```

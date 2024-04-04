@@ -1,9 +1,20 @@
+---
+title: "_Projet Statistique avec R_"
+author: "ABOTSI Kossi Tonyi Wobubey"
+format: html
+editor: visual
+---
+
 ```{r}
 #Package pacman installe et charge les packages mêmes s'ils ne sont pas dans notre environement de développement.
 if(!require(pacman)) install.packages('pacaman')
 
 pacman::p_load(pacman, readr, lubridate, tseries, forecast, tidyverse, plotly,lmtest,car)
 ```
+
+## Exercice I : 
+
+#### Imporation des données
 
 ```{r}
  data_Poland <- read.csv("Poland.csv")
@@ -18,83 +29,329 @@ pacman::p_load(pacman, readr, lubridate, tseries, forecast, tidyverse, plotly,lm
  
 ```
 
+Mes données étant très granulaires c'est à dire collecté par heure, cela peut rendre l'ajustement d'un model difficile en raison de la complexité de la série emporelle.
+
+Donc au lieu de travailler avec les données par heure, j'aggrege les données sur une base quotidienne. Cela réduira la granularité des données et pourrait rendre l'ajustement d'un modèle plus facile.
+
 ```{r}
-monthly_data_Poland = aggregate(data_Poland$Prix,by = list(Date_local=format(data_Poland$Date_local,"%Y-%m-%d")),FUN = sum)
+dayly_data_Poland = aggregate(data_Poland$Prix,by = list(Date_local=format(data_Poland$Date_local,"%Y-%m-%d")),FUN = sum)
 
-colnames(monthly_data_Poland)[2] = "Prix"
+colnames(dayly_data_Poland)[2] = "Prix"
 
-monthly_data_Poland$Date_local = ymd(monthly_data_Poland$Date_local)
+dayly_data_Poland$Date_local = ymd(dayly_data_Poland$Date_local)
 
-monthly_data_Poland
+dayly_data_Poland
 ```
 
+### Visualisation graphique
+
 ```{r}
-graphe <- ggplot(data = monthly_data_Poland, aes(x = Date_local, y = Prix)) +
-  geom_line(color='red') +
+graphe <- ggplot(data = dayly_data_Poland, aes(x = Date_local, y = Prix)) +
+  geom_line(color='blue') +
   theme_minimal() +
-  labs(title = "Evolution du prix de l'electricité", x = "Temps", y = "Prix (Euro/Mwhe)") +
-  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "1 year") +
+  labs(title = "Evolution du prix de l'electricité", x = "Temps (Année-Mois-Jour)", y = "Prix (Euro/Mwhe)") +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "6 month") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),plot.title = element_text(hjust = 0.5))
 
 #Convertir en graphique plotly pour l'interactivité
 ggplotly(graphe)
 ```
 
-```{r}
-monthly_data_Poland_ts = ts(monthly_data_Poland$Prix,start=c(year(min(monthly_data_Poland$Date_local)),month(min(monthly_data_Poland$Date_local)),day(min(monthly_data_Poland$Date_local))),frequency = 7)
+Sur notre graphe on remarque que globalement notre tendance (Prix de l'électricité) ne varie pas trop de 2015 à 2020 et augmente considérablement entre 2021 et 2023 année à partir duquel on remarque une chute jusqu'au prix habituel. Cette augmentation globale du prix de l'électricité entre 2021 et 2023 peut être du en parti au COVID-19 et aussi la guerre entre la Russie et l'ukraine(2022 première année de guerre avec un pic maximal de 771 euro par megawattheure).
 
-plot(decompose(monthly_data_Poland_ts))
+graphe avec la tendance.....
+
+#### Stationnarisation de notre série
+
+Avant d'ajuster un model ARMA, la question qu'on se pose est de savoir si notre serie est stationnaire. En effet on prefère modeliser des series stationnaires car elles sont plus stable (moyenne , variance, autocorrélogragramme ... sont constante).
+
+Sur notre série observé ci dessus on peut avoir des doutes sur sa stationnarité car elle présente une tendance qui augmente puis diminue légèrement.. On observe également une forte variation des amplitudes. On passe au log pour stabiliser un peu sa variabilité.
+
+Comme il y a des valeurs négatives dans notre série temporelle je vais ajouter la valeur absolue du minimum de la valeur prise par cette série et plus 1 pour eviter les valeurs nulles.
+
+```{r}
+data_Poland_additive = dayly_data_Poland
+
+min_valeur_abs = abs(min(data_Poland_additive$Prix))
+
+data_Poland_additive$Prix = dayly_data_Poland$Prix + min_valeur_abs+1 #ajout de 1 pour eviter les valeurs nulles
+
+graphe_2=ggplot(data = data_Poland_additive, aes(x = Date_local, y = log(Prix))) +
+  geom_line(color = 'blue') +
+  theme_minimal() +
+  labs(title = "Evolution du prix de l'electricité passé au log", x = "Temps (Année-Mois-Jour)", y = "log du Prix (Euro/Mwhe)") +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "6 month") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),plot.title = element_text(hjust = 0.5))
+
+#Convertir en graphique plotly pour l'interactivité
+ggplotly(graphe_2)
 ```
 
+On ne remarque pas un grand changement qui peut nous conduire à la stationnaité de cette série.
+
+Analysons la sortie acf de notre série.
+
 ```{r}
-acf_1 = acf(monthly_data_Poland_ts,plot=FALSE)
+dayly_data_Poland_ts = ts(data_Poland_additive$Prix,start=c(year(min(data_Poland_additive$Date_local)),month(min(data_Poland_additive$Date_local)),day(min(data_Poland_additive$Date_local))),frequency = 7)
+
+
+acf_1 = acf(dayly_data_Poland_ts,plot=FALSE)
 
 acf_1$lag = acf_1$lag*7
 
 plot(acf_1,ylim = c(-1,1))
 ```
 
+On constate ici que la décroissance de cette sortie acf est très très lente. Donc on peut conclure que notre serie n'est pas stationnaire.
+
+Pour rendre notre série stationnaire nous devons la différencié pour éliminer la tendance et saisonnalitée.
+
+On effectue une différenciation à l'ordre1 nous obtenons donc la série **(I-B)log(Xt)**.
+
+On obtient le graphique suivant :
+
 ```{r}
-monthly_data_Poland_ts_dif_1 = diff(monthly_data_Poland_ts,lag=1,differences = 1)
+dayly_data_Poland_ts_dif_1 = diff(dayly_data_Poland_ts,lag=1,differences = 1)
 
-acf_2 = acf(na.omit(monthly_data_Poland_ts_dif_1),plot = FALSE)
+plot(dayly_data_Poland_ts_dif_1)
 
-acf_2$lag = acf_2$lag*7
 
-plot(acf_2,ylim = c(-1,1))
 
-pacf_2 = pacf(na.omit(monthly_data_Poland_ts_dif_1),plot = FALSE)
-plot(pacf_2,ylim = c(-1,1))
+#pacf_2 = pacf(na.omit(dayly_data_Poland_ts_dif_1),plot = FALSE)
+#plot(pacf_2,ylim = c(-1,1))
 
-plot(monthly_data_Poland_ts_dif_1)
+
 ```
 
-Le corrélogramme de cette différence prmière revèle la presence de pic significatif dans la fonction d'autocorrélation à la fois au retard 7, 14, 21, ... autrement dit des retard de multiple de 7. Ce qui nous renseigne sur une présence de saisonnalité qu'on vas éliminer en faisant appel à un filtre de différence saisonnière
+Observons sa sortie acf :
 
 ```{r}
-monthly_data_Poland_ts_dif_2 = diff(monthly_data_Poland_ts_dif_1,lag=7,differences = 1)
-
-acf_2 = acf(na.omit(monthly_data_Poland_ts_dif_2),plot = FALSE)
+acf_2 = acf(na.omit(dayly_data_Poland_ts_dif_1),plot = FALSE)
 
 acf_2$lag = acf_2$lag*7
 
 plot(acf_2,ylim = c(-1,1))
+```
 
-pacf_2 = pacf(na.omit(monthly_data_Poland_ts_dif_2),plot = FALSE)
-plot(pacf_2,ylim = c(-1,1))
+La sortie acf de cette différence première revèle est rapidement décroissante au début mais malheureusement on note la presence de pic significatif qui figure tous les 7, 14, 21, ... autrement dit des retards de multiple de 7. Cette décroissance lente vers 0 nous renseigne sur une présence de saisonnalité qu'on vas éliminer en faisant appel à un filtre de différence saisonnière.
+
+Nous allons effectué une différentiation d'ordre 7 nous obtenons donc la série **(I-B\^7)(I-B)log(Xt)**.
+
+```{r}
+dayly_data_Poland_ts_dif_2 = diff(dayly_data_Poland_ts_dif_1,lag=7,differences = 1)
 
 plot(monthly_data_Poland_ts_dif_2)
+
+#pacf_2 = pacf(na.omit(monthly_data_Poland_ts_dif_2),plot = FALSE)
+#plot(pacf_2,ylim = c(-1,1))
+
+
 ```
 
+Observons sa sortie acf :
+
 ```{r}
-model = Arima(monthly_data_Poland_ts,order = c(2,1,2),seasonal = list(order = c(2,1,2),period=7))
+acf_2 = acf(na.omit(dayly_data_Poland_ts_dif_2),plot = FALSE)
+
+acf_2$lag = acf_2$lag*7
+
+plot(acf_2,ylim = c(-1,1))
+```
+
+Cette sortie acf de la série doublement différencié semble pouvoir être interpreté comme une sortie acf d'une série stationnaire car nous n'observons pas la même décroissance lente que nous avions précédemment au contraire on observe une décroissance rapide vers 0 de notre autocorrélograme simple estimé.
+
+Donc notre série doublement différencié **(I-B\^7)(I-B)log(Xt)** peut être potentiellement considéré comme une série stationnaire.
+
+On ajustera alors un modèle ARMA sur la série **(I-B)(I-B\^7)log(Xt).**
+
+#### Estimation du modèle :
+
+On veut ajuster un model ARMA(p,q) sur la série **(I-B)(I-B\^7)log(Xt).** On vas utiliser la méthode de ***Box et Jenkins*** dont les trois étapes sont les suivantes :
+
+-   **Identification**
+
+-   **Estimation**
+
+-   **Vérification**
+
+    **a-) Identification**
+
+Pour choisir la valeur de p et q on utilise respectivement l'autocorrélogramme partiel et l'autocorrélogramme simple.
+
+#### Autocorrélogramme simple: 
+
+```{r}
+plot(acf_2,ylim = c(-1,1))
+```
+
+On remarque que sur l'autocorrélogramme simple le dernier pic significatif est 2 ou bien 7 mais 7 est trop grand donc je choisi **q=2**.
+
+#### Autocorrélogramme partiel : 
+
+```{r}
+pacf_2 = pacf(na.omit(dayly_data_Poland_ts_dif_2),plot = FALSE)
+
+pacf_2$lag = pacf_2$lag*7
+
+plot(pacf_2,ylim = c(-1,1))
+```
+
+De même sur cette fonction d'autocorrélation partielle le dernier pic significatif est 2 ou 7 mais 7 est trop grand donc je choisi **p=2**.
+
+Donc la série **(I-B)(I-B\^7)log(Xt)** peut être modeliser par un **ARMA(2,2)**
+
+**b) Estimation**
+
+On peut imaginer un premier modèle qui sera un **SARIMA(2,1,2)(2,1,2)(7)** pour le processus **log(Xt)**.
+
+```{r}
+model = Arima(monthly_data_Poland_ts,order = c(2,1,2),seasonal = list(order = c(2,1,2),period=7),include.mean = FALSE,method = "CSS-ML")
+
+summary(model)
+```
+
+**c)Validation**
+
+Après avoir ajusté un model SARIMA, il est important de vérifier la significativité des des paramètres obtenus dans le modèle et que les résidus du modèle ont de bonne propriétés (**Bruit blanc faible, Homoscédasticité et Normalité**) pour s'assurer de la qualité de l'ajustement.
+
+-   **Significativité des coefficients**
+
+    On effectue le test de significativité des paramètres obtenus dans le modèle.
+
+    On a les hypothèses :
+
+    **H0 : le coefficient est nul**
+
+    **H1: le coefficient est différent de 0**
+
+    Voici la commande
+
+```{r}
+coeftest(model)
+```
+
+On constate que tous les coefficients ne sont pas tous significativement différent de zéro à un niveau de test de 5%. On remarque que les paramètres ar1, ar2, sar1, sar2 et sma2 ne sont pas significativement différent de 0, en effet leurs p-valeurs sont inférieur à 5%.
+
+| Col1 | Col2 | Col3 | Col4 | Col5 | Col6 | Col7 | Col8 |
+|------|------|------|------|------|------|------|------|
+|      |      |      |      |      |      |      |      |
+
+Ce que nous allons faire est de retirer le paramètre le moins significatif et réajusté le model ainsi obtenu.
+
+Le paramètre le moins significatif est celui qui la plus grande p-valeur donc on retire le pararmètre ar2 qui a une p-valeur = 0.571254. On obtient un **SARIMA(1,1,2)(2,1,2)(7).**
+
+```{r}
+model_1 = Arima(monthly_data_Poland_ts,order = c(1,1,2),seasonal = list(order = c(2,1,2),period=7),include.mean = FALSE,method = "CSS-ML")
+
+summary(model_1)
+```
+
+Pour le test de significativité des coefficients on a :
+
+```{r}
+coeftest(model_1)
+```
+
+Nous constatons que trois des paramètres n'est pas toujours significatif. Nous allons de nouveau retiré le coefficient sar1 qui est le moins significatif avec une p-valeur = 0.6158614. On obtient un **SARIMA(1,1,2)(1,1,2)(7).**
+
+```{r}
+model_2 = Arima(monthly_data_Poland_ts,order = c(1,1,2),seasonal = list(order = c(1,1,2),period=7),include.mean = FALSE,method = "CSS-ML")
+
+summary(model_2)
+```
+
+Pour le test de significativité des coefficients on a :
+
+```{r}
+coeftest(model_2)
+```
+
+Nous constatons que un des paramètres n'est pas toujours significatif. Nous allons de nouveau retiré le coefficient sar1 qui est le moins significatif avec une p-valeur = 0.09298. On obtient un **SARIMA(1,1,2)(0,1,2)(7).**
+
+```{r}
+model_3 = Arima(monthly_data_Poland_ts,order = c(1,1,2),seasonal = list(order = c(0,1,2),period=7),include.mean = FALSE,method = "CSS-ML")
+
+summary(model_3)
+```
+
+Pour le test de significativité des coefficients on a :
+
+```{r}
+coeftest(model_3)
+```
+
+On voit clairement que tous les coefficfients sont significatifs, en effet leurs p-valeurs sont strictement inférieurs à 5%. Donc le modèle_3 qui est un **SARIMA(1,1,2)(0,1,2)(7)** est le modèle retenu pour la significativité de tous ses paramètres.
+
+-   **Test de blancheur des résidus**
+
+    On effectu le test de blancheur (**Ljung-Box**) des résidus du models.
+
+    On a les hypothèses :
+
+    **H0 : Les résidus sont des bruits blancs**
+
+    **H1: Les résidus ne sont pas des bruits blancs**
+
+    Voici la commande :
+
+    ```{r}
+    resultat = data.frame(Order = integer(),Statistic_test=numeric(),P_valeur=numeric())
+
+    for (i in 1:7)
+    {
+      test_resultat = Box.test(model_3$residuals,lag = i,type = "Ljung-Box")
+      resultat = rbind(resultat,data.frame(Order=i,Statistic_test = test_resultat$statistic,P_valeur = test_resultat$p.value))
+    }
+
+    resultat
+
+    ```
+
+La p-valeur = 0.9402 n'est pas inférieur à 5% donc nous ne rejetons pas H0. Donc les résidus sont des bruits blancs.
+
+-   **Normalité des résidus**
+
+    ```{r}
+    qqnorm(model_3$residuals)
+    qqline(model_3$residuals)
+    shapiro.test(model_3$residuals)
+    ```
+
+-   **Homoscédasticité**
+
+    ```{r}
+    acf(model_3$residuals)
+    ```
+
+```{r}
+model = Arima(monthly_data_Poland_ts,order = c(1,1,2),seasonal = list(order = c(2,1,2),period=7))
 
 summary(model)
 
 acf(model$residuals)
+plot(model$residuals)
+```
+
+```{r}
+coeftest(model)
+```
+
+```{r}
+model = Arima(monthly_data_Poland_ts,order = c(1,1,2),seasonal = list(order = c(1,1,2),period=7))
+
+summary(model)
+
+acf(model$residuals)
+plot(model$residuals)
+```
+
+```{r}
+coeftest(model)
 ```
 
 ```{r}
 model_1 = auto.arima(monthly_data_Poland_ts)
 summary(model_1)
 ```
+
+**c)Validation**
