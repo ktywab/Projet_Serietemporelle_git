@@ -1,0 +1,26 @@
+---
+title: "Projet_PartieII"
+author: "Kossi Tonyi Wobubey ABOTSI"
+date: "2024-04-08"
+output: html_document
+---
+
+Donner un modèle liant la mortatilité due à la pollution de l'air et la consomation par habitant de different type d'énergie. Commenter les résultats ainsi que la fiabilité du modèle.
+
+```{r}
+#Package pacman installe et charge les packages mêmes s'ils ne sont pas dans notre environement de développement.
+if(!require(pacman)) install.packages('pacaman')
+
+pacman::p_load(pacman, readr, lubridate, tseries, forecast, tidyverse, plotly,lmtest,car)
+```
+
+## Importation des données
+
+```{r}
+mortalite_pollution = read.csv("death-rate-from-air-pollution-per-100000.csv")
+
+conso_energie = read.csv("energy-consumption-by-source-and-country.csv")
+
+demographic_data = read.csv("population-and-demography.csv")
+
+```
