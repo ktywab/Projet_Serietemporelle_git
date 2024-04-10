@@ -24,3 +24,48 @@ conso_energie = read.csv("energy-consumption-by-source-and-country.csv")
 demographic_data = read.csv("population-and-demography.csv")
 
 ```
+
+```{r}
+colnames(mortalite_pollution)[4] = "Morta_100000"
+view(mortalite_pollution)
+```
+
+```{r}
+#Je considère les années dont j'ai le taux de mortalité pour 100000 hbts et la population 
+#mortalite_pollution_update = mortalite_pollution %>% semi_join(demographic_data,by="Year")
+colnames(demographic_data)[1]="Entity"
+
+data = mortalite_pollution  %>% 
+  inner_join(demographic_data,by = join_by(Entity, Year))
+
+#Je calcul la mortalité pour la population de chaque pays
+data$Mortalite_Pollution = data$Population * data$Morta_100000 / 100000
+
+#Je renomme les colonnes
+col_nom = list("Geothermal_Biomass","Biofuels","Solaire","Heolienne","Hydro","Nucleaire","Gaz","Charbon","Petrole")
+colnames(conso_energie)[4:12] = col_nom
+
+#jointure
+data = data   %>% 
+  inner_join(conso_energie,by = join_by(Entity, Code, Year))
+
+#Selection des colonnes utile pour la modelisation 
+data = data   %>% select(Entity,Year,Mortalite_Pollution:Petrole)
+
+#data = na.omit(data)
+#Centrage et réduction des données
+data[,4:12] = scale(data[,4:12])
+
+view(data)
+```
+
+```{r}
+data_2011 = data  %>% 
+  filter(Year==2011)
+```
+
+```{r}
+model = lm(Mortalite_Pollution ~ .-Entity-Year,data=data_2011)
+
+summary(model)
+```
