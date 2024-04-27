@@ -1,0 +1,877 @@
+---
+title: "Projet Statistique avec R"
+author: "ABOTSI Kossi Tonyi Wobubey"
+date: "`r Sys.Date()`"
+output: html_document
+editor: visual
+---
+
+### INTRODUCTION
+
+Ce projet se divise en deux principales sections. La première est dédiée à la modélisation d'une série temporelle et à la prévision des prix pour l'année 2024. La seconde vise à élaborer un modèle qui établit un lien entre la mortalité attribuable à la pollution atmosphérique et la consommation par habitant de différents types d'énergie. Dans le cadre de ce projet, tous les tests statistiques seront réalisés avec un seuil de signification de $\alpha = 5\%$**.**
+
+### Chargement des packages necessaire pour le projet
+
+```{r warning=FALSE,message=FALSE,error=FALSE}
+#Package pacman installe et charge les packages mêmes s'ils ne sont pas dans notre environement de développement.
+if(!require(pacman)) install.packages('pacaman')
+
+pacman::p_load(pacman, readr, lubridate, tseries, forecast, tidyverse, plotly,lmtest,car,MASS,latex2exp,openxlsx,sandwich,ggfortify,GGally,broom)
+```
+
+## Exercice I :
+
+#### A-Imporation des données
+
+```{r}
+ data_Poland <- read.csv("Poland.csv")
+
+ 
+ colnames(data_Poland)[4] = 'Date_local'
+ colnames(data_Poland)[3] = 'Date_UTC'
+ colnames(data_Poland)[5] = 'Prix'
+ 
+ #Convertion en type date
+ data_Poland$Date_local = ymd_hms(data_Poland$Date_local)
+ head(data_Poland)
+ 
+```
+
+Étant donné que mes données sont extrêmement détaillées, étant collectées par heure, cela peut compliquer l'ajustement d'un modèle en raison de la complexité de la série temporelle. De plus, mon objectif est de réaliser des prévisions des prix moyens mensuels pour l'année 2024.
+
+Par conséquent, plutôt que de travailler avec des données horaires, je choisis d'agréger ces données sur une base mensuelle. Cette approche réduira la granularité des données, ce qui pourrait faciliter considérablement l'ajustement du modèle.
+
+```{r}
+# Agréger les données quotidiennes des prix en Pologne par mois et calculer la moyenne des prix pour chaque mois
+monthly_data_Poland <- aggregate(data_Poland$Prix, by = list(Date_local = format(data_Poland$Date_local, "%Y-%m")), FUN = mean)
+
+# Renommer la deuxième colonne en "Prix"
+colnames(monthly_data_Poland)[2] <- "Prix"
+
+# Convertir la date au format ymd
+monthly_data_Poland$Date_local <- ym(monthly_data_Poland$Date_local)
+
+
+# Afficher les premières lignes des données
+head(monthly_data_Poland)
+write.xlsx(monthly_data_Poland, "mon_fichier_ts.xlsx", rowNames = FALSE)
+```
+
+### B-Visualisation graphique (Analyse de l'évolution de la série)
+
+```{r}
+graphe <- ggplot(data = monthly_data_Poland, aes(x = Date_local, y = Prix)) +
+  geom_line(color='blue') +
+  theme_minimal() +
+  labs(title = "Evolution du prix de l'electricité", x = "Temps (Année-Mois)", y = "Prix (Euro/Mwhe)") +
+  scale_x_date(date_labels = "%Y-%m", date_breaks = "6 month") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),plot.title = element_text(hjust = 0.5))
+
+#Convertir en graphique plotly pour l'interactivité
+ggplotly(graphe)
+```
+
+Sur notre graphique, il est observable que la tendance générale des prix de l'électricité reste relativement stable de 2015 à 2020, mais connaît une hausse notable entre 2021 et 2023. Suite à cette période, les prix chutent, revenant à des niveaux plus habituels. Cette augmentation significative des prix entre 2021 et 2023 pourrait être attribuée en partie à la pandémie de COVID-19, ainsi qu'aux conséquences de la guerre entre la Russie et l'Ukraine, 2022 marquant la première année de conflit avec un pic maximal à 198.82 euros par mégawattheure.
+
+### C-Modélisation
+
+#### Stationnarisation de notre série
+
+Avant d'ajuster un modèle de série temporelle, il est essentiel de se demander si la série est stationnaire. Les séries stationnaires, caractérisées par une stabilité de la moyenne, de la variance et de l'autocorrélogramme, sont généralement plus faciles à modéliser.
+
+Concernant la série que nous examinons, des doutes sur sa stationnarité peuvent surgir, notamment en raison d'une tendance qui augmente puis diminue légèrement, accompagnée de variations importantes d'amplitude. Pour réduire cette variabilité, nous avons recours à une transformation de Box-Cox.
+
+Soit $(X_t)_t\in \mathbb{N}$ notre série initial,$(Y_t)_t\in \mathbb{N}$ la série transformée avec $Y_t = (X_t^\lambda-1)/\lambda$
+
+```{r}
+monthly_data_Poland_ts = ts(monthly_data_Poland$Prix,start=c(year(min(monthly_data_Poland$Date_local)),month(min(monthly_data_Poland$Date_local)),day(min(monthly_data_Poland$Date_local))),frequency =12)
+
+box <- boxcox(monthly_data_Poland_ts ~ 1, lambda = seq(-1, 1, 1/10))
+lambda <- box$x[which.max(box$y)]
+lambda
+```
+
+Il est clair que la log-vraisemblance atteint son maximum lorsque $\lambda = -0.979798$.
+
+Procédons à la transformation.
+
+```{r}
+
+monthly_data_Poland$Prix = ((monthly_data_Poland$Prix)^lambda-1)/lambda
+
+monthly_data_Poland_ts = (monthly_data_Poland_ts^lambda-1)/lambda
+
+graphe_2=ggplot(data = monthly_data_Poland, aes(x = Date_local, y = Prix)) +
+  geom_line(color = 'blue') +
+  theme_minimal() +
+  labs(title = "Evolution du prix de l'electricité transformé", x = "Temps (Année-Mois-Jour)", y = "Prix (Euro/Mwhe)") +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "6 month") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),plot.title = element_text(hjust = 0.5))
+
+#Convertir en graphique plotly pour l'interactivité
+ggplotly(graphe_2)
+
+```
+
+Décomposons notre série temporelle transformée, notée $(Y_t)_t\in \mathbb{Z}$ , afin de déterminer et d'extraire ses composantes de tendance et de saisonnalité.
+
+```{r}
+plot(decompose(monthly_data_Poland_ts))
+```
+
+Donc on voit clairement qu'on a une tendance polynomiale, accompagnée d'une composante saisonnière qui se répete tous les 12 mois.
+
+**Analysons la sortie acf de notre série** $Y_t$ **.**
+
+```{r}
+# Créer les graphiques
+par(mfrow = c(1, 2))  # Diviser la fenêtre graphique en deux colonnes
+acf = acf(na.omit(monthly_data_Poland_ts),plot = FALSE)
+acf$lag <- acf$lag * 12
+plot(acf, ylim = c(-1, 1),main=TeX("$Y_t$"))
+
+pacf <- pacf(na.omit(monthly_data_Poland_ts), plot = FALSE)
+pacf$lag <- pacf$lag * 12
+plot(pacf, ylim = c(-1, 1),main=TeX("$Y_t$"))
+```
+
+Nous observons ici que la décroissance de cette sortie ACF est très lente. Sur cette base, nous pouvons conclure que notre série n'est pas stationnaire.
+
+Pour confirmé ou infirmé mon intution que j'ai eu avec l'analyse visuel je fais le test de ***Dikey fuller pour la stationnarité***
+
+**H0 : Il y a présence de racine unitaire**
+
+**H1 : Il n'y a pas de racine unitaire**
+
+```{r}
+test_res = adf.test(monthly_data_Poland_ts,k=12)
+test_res
+```
+
+J'obtiens une p-valeur de 0.4057, qui est supérieure au seuil de 5% de mon test. Par conséquent, nous conservons l'hypothèse nulle H0​, ce qui me conduit à conclure à la présence d'une racine unitaire et, donc, à la non-stationnarité de ma série.
+
+Nous effectuons une différenciation à l'ordre 12 pour éliminer la saisonnalité, ce qui nous donne la série $(I-B^{12})Y_t$, où B correspond à l'opérateur de retard.
+
+On obtient le graphique suivant :
+
+```{r}
+monthly_data_Poland_ts_dif_12 = diff(monthly_data_Poland_ts,lag=12,differences = 1)
+
+plot(monthly_data_Poland_ts_dif_12,main=TeX("$(I-B^{12})Y_t$"))
+```
+
+Observons sa sortie acf :
+
+```{r}
+acf_2 = acf(na.omit(monthly_data_Poland_ts_dif_12),plot = FALSE)
+
+acf_2$lag = acf_2$lag*12
+
+plot(acf_2,ylim = c(-1,1),main=TeX("$(I-B^{12})Y_t$"))
+```
+
+Nous observons une décroissance toujours lente dans notre sortie ACF. Par conséquent, nous procédons à une différenciation de premier ordre de la série, qui avait déjà été différenciée à l'ordre 12, afin d'éliminer la tendance. Nous obtenons ainsi la série suivante : $(I-B)(I-B^{12})Y_t$.
+
+on obtient le graphe suivant :
+
+```{r}
+monthly_data_Poland_ts_dif_1 = diff(monthly_data_Poland_ts_dif_12,lag=1,differences = 1)
+
+plot(monthly_data_Poland_ts_dif_1,main=TeX("$(I-B)(I-B^{12})Y_t$"))
+
+
+```
+
+Observons sa sortie acf :
+
+```{r}
+acf_2 = acf(na.omit(monthly_data_Poland_ts_dif_1),plot = FALSE)
+
+acf_2$lag = acf_2$lag*12
+
+plot(acf_2,ylim = c(-1,1),main=TeX("$(I-B)(I-B^{12})Y_t$"))
+```
+
+La sortie ACF de la série, après une double différenciation, semble indiquer que nous avons affaire à une série stationnaire. En effet, contrairement à la décroissance lente observée précédemment, nous notons cette fois une décroissance rapide vers zéro dans notre autocorrélogramme estimé.
+
+Je refais le test de ***Dikey fuller pour la stationnarité***
+
+```{r}
+adf.test(monthly_data_Poland_ts_dif_1)
+```
+
+J'obtiens une p-valeur de 0.01, qui est inférieure au seuil de 5% de mon test, ce qui nous amène à rejeter l'hypothèse nulle 𝐻0H0​. Par conséquent, notre série différenciée $(I-B)(I-B^{12})Y_t$ peut être potentiellement considéré comme stationnaire.
+
+#### Ajustement d'un model sur le processus $(I-B)(I-B^{12})Y_t$ **et Prevision pour l'année 2024**
+
+On veut ajuster un model ARMA sur la série $(I-B)(I-B^{12})Y_t$**.** On vas utiliser la méthode de ***Box et Jenkins*** dont les quatres étapes sont les suivantes :
+
+-   **Identification**
+
+-   **Estimation**
+
+-   **Validation**
+
+-   **Prévision**
+
+    **a-) Identification**
+
+Les valeurs des paramètres sont déterminées à l'aide de l'autocorrélogramme partiel et de l'autocorrélogramme simple.
+
+#### Autocorrélogramme simple et Autocorrélogramme partiel :
+
+```{r}
+# Créer les graphiques
+par(mfrow = c(1, 2))  # Diviser la fenêtre graphique en deux colonnes
+acf = acf(na.omit(monthly_data_Poland_ts_dif_1),plot = FALSE)
+acf$lag <- acf$lag * 12
+plot(acf, ylim = c(-1, 1),main=TeX("$(I-B)(I-B^{12})Y_t$"))
+
+pacf <- pacf(na.omit(monthly_data_Poland_ts_dif_1), plot = FALSE)
+pacf$lag <- pacf$lag * 12
+plot(pacf, ylim = c(-1, 1),main=TeX("$(I-B)(I-B^{12})Y_t$"))
+```
+
+Sur l'autocorrélogramme simple estimé, nous observons un pic significatif au retard 1. De même, la fonction d'autocorrélation partielle estimée révèle un pic significatif à ce même retard.
+
+Ainsi, il est envisageable de proposer un premier modèle, **`model_1`**, qui serait un **SARIMA(1,1,1)(1,1,1)\[12\]**.
+
+**b)Estimation et Validation**
+
+Plusieurs modèles sont susceptibles de correspondre à notre processus générateur de données. Le meilleur modèle, celui qui sera finalement choisi, sera déterminé sur la base des critères suivants :
+
+-   La minimisation du critère d'information d'Akaike (AIC).
+
+-   La significativité des coefficients estimés.
+
+-   La blancheur des résidus, assurant que ces derniers ne présentent aucune autocorrélation.
+
+**Estimation du modèle SARIMA(1,1,1)(1,1,1)\[12\] :**
+
+On estime le modèle identifié **model_1**.
+
+```{r}
+model_1 = Arima(monthly_data_Poland_ts, order = c(1, 1, 1),list(order=c(1,1,1),period=12), method = "CSS-ML")
+summary(model_1)
+```
+
+Procédons aux tests de significativité des coefficients obtenus dans le modèle.
+
+Les hypothèses sont les suivantes :
+
+-   **H0 (Hypothèse nulle)** : Le coefficient est nul.
+
+-   **H1 (Hypothèse alternative)** : Le coefficient est différent de zéro.
+
+**Significativité des coefficients du model_1**
+
+```{r}
+coeftest(model_1)
+```
+
+Les p-valeurs de certains coefficients ne sont pas toutes inférieures au seuil de 5% du test, ce qui signifie que tous les coefficients ne sont pas significativement différents de zéro. Notamment, les coefficients **`ar1`**, **`ma1`** et **`sar1`** ne se distinguent pas significativement de zéro, car leurs p-valeurs ne sont pas inférieures à 5%. Par conséquent, nous éliminons le paramètre le moins significatif, **`sar1`**, et réexaminons le modèle ainsi modifié.
+
+Considérons donc **`model_2`**, le nouveau modèle obtenu, qui est un **SARIMA(1,1,1)(0,1,1)\[12\]**.
+
+On estime **model_2**
+
+```{r}
+model_2 = Arima(monthly_data_Poland_ts, order = c(1, 1, 1),list(order=c(0,1,1),period=12), method = "CSS-ML")
+summary(model_2)
+```
+
+Procédons au test de significativité des coefficients obtenus dans le modèle.
+
+```{r}
+coeftest(model_2)
+```
+
+Nous obtenons un modèle dont l'AIC est inférieur à celui de **`model_1`**, et nous constatons à nouveau que deux des paramètres ne sont pas significatifs. Il s'agit des coefficients **`ar1`** et **`ma1`**, dont les p-valeurs restent inférieures à 5%. Nous éliminons donc du modèle le paramètre le moins significatif, **`ar1`**.
+
+En suivant la même méthode que précédemment, nous allons maintenant tester **`model_3`**, qui est un **SARIMA(0,1,1)(0,1,1)\[12\]**.
+
+```{r}
+model_3 = Arima(monthly_data_Poland_ts, order = c(0, 1, 1),list(order=c(0,1,1),period=12), method = "CSS-ML")
+summary(model_3)
+```
+
+Procédons au test de significativité des coefficients obtenus dans le modèle.
+
+```{r}
+coeftest(model_3)
+```
+
+Nous constatons que les deux coefficients de ce modèle sont significatifs, car les p-valeurs de ce test de significativité sont toutes inférieures à 5%, et l'AIC de ce modèle est également inférieur à ceux des deux modèles précédents.
+
+Il reste maintenant à vérifier si les résidus de notre modèle estimé correspondent à un bruit blanc, c'est-à-dire à une série temporelle normalement distribuée, avec une moyenne de zéro, sans autocorrélation et homoscédastique. Voici quelques points à vérifier :
+
+-   **Nullité de la moyenne**
+
+Calculons la moyenne de nos résidus :
+
+```{r}
+mean(model_3$residuals)
+```
+
+La moyenne est extrêmement proche de zéro, ce qui nous permet de conclure à la nullité de la moyenne des résidus.
+
+-   **Test de présence d'autocorrélation**
+
+    Nous effectuons le test de Ljung-Box sur les résidus du modèle.
+
+    Les hypothèses sont les suivantes :
+
+    -   **H0 (Hypothèse nulle)** : Les résidus ne sont pas autocorrélés.
+
+    -   **H1 (Hypothèse alternative)** : Les résidus sont autocorrélés.
+
+    Voici la commande :
+
+    ```{r}
+    resultat = data.frame(Order = integer(),Statistic_test=numeric(),P_valeur=numeric())
+
+    #Application du test de Ljung-Box pour différent ordre
+
+    for (i in 1:12)
+    {
+      test_resultat = Box.test(model_3$residuals,lag = i*6,type = "Ljung-Box")
+      resultat = rbind(resultat,data.frame(Order=i*6,Statistic_test = test_resultat$statistic,P_valeur = test_resultat$p.value))
+    }
+
+    resultat
+
+    ```
+
+Pour ces différents retards, nous constatons que les p-valeurs ne sont pas inférieures au seuil de 5% du test. Par conséquent, nous ne pouvons pas rejeter l'hypothèse nulle selon laquelle les résidus ne sont pas autocorrélés.
+
+-   **Normalité des résidus**
+
+Observons le QQ-plot pour évaluer la normalité des résidus de notre modèle.
+
+```{r}
+qqnorm(model_3$residuals)
+qqline(model_3$residuals)
+```
+
+Nous observons que la majorité des points se concentrent autour de la droite théorique, à l'exception de quelques points situés dans les queues de la distribution. Sur cette base, nous pouvons conclure à la normalité des résidus.
+
+Confirmons cette observation avec le test de **Shapiro-Wilk**. Les hypothèses pour ce test sont les suivantes :
+
+-   **H0 (Hypothèse nulle)** : Les données suivent une distribution normale.
+
+-   **H1 (Hypothèse alternative)** : Les données ne suivent pas une distribution normale.
+
+```{r}
+shapiro.test(model_3$residuals)
+```
+
+Nous obtenons une p-valeur de 0.6473, qui est supérieure au seuil de 5%, donc nous ne pouvons pas rejeter l'hypothèse nulle H0​. Ainsi, nous considérons que le test de normalité est vérifié.
+
+-   **Homoscédasticité**
+
+Nous utilisons le test de Breusch-Pagan pour évaluer l'homogénéité de la variance des erreurs. Les hypothèses de ce test sont les suivantes :
+
+-   **H0 (Hypothèse nulle)** : La variance des erreurs est constante (Homoscédasticité).
+
+-   **H1 (Hypothèse alternative)** : La variance des erreurs n’est pas constante (Hétéroscédasticité).
+
+```{r}
+residu=model_3$residuals
+test_bp = bptest(residu~fitted(model_3)+I(fitted(model_3)^2),data = data.frame(residu,fitted(model_3)))
+
+print(test_bp)
+```
+
+Étant donné que la **p-valeur est de 0.2363, qui est supérieure au seuil de 5%, nous ne pouvons pas rejeter l'hypothèse nulle.** Cela indique que la variance des résidus n'est pas dépendante des valeurs ajustées par le modèle ou de leurs carrés, conformément aux prédicteurs inclus dans le modèle de régression des carrés des résidus. Nous pouvons donc conclure à l'homoscédasticité des résidus.
+
+Toutes les hypothèses étant donc vérifiées, visualisons l'ACF des résidus.
+
+**Visualisons l'acf des résidus**
+
+```{r}
+acf_=acf(model_3$residuals,plot=FALSE)
+acf_$lag = acf_$lag * 12
+
+plot(acf_,ylim = c(-1, 1),main="Résidus")
+```
+
+En résumé, l'analyse des résidus a confirmé que notre modèle répond aux hypothèses de normalité et d'homoscédasticité. Les tests de Shapiro-Wilk et de Breusch-Pagan ont validé que les résidus sont normalement distribués et présentent une variance constante, assurant ainsi l'adéquation du modèle. De plus, l'inspection de l'ACF des résidus ne montre aucun pic significatif, indiquant que les résidus sont effectivement des bruits blancs.
+
+Nous avons donc établi un modèle SARIMA(0,1,1)(0,1,1)\[12\] qui s'avère convenable. À partir de ce modèle, nous pouvons désormais effectuer des prévisions.
+
+**c)Prédiction**
+
+Pour nous assurer de la qualité prédictive de notre modèle, nous pouvons effectuer une analyse à postériori.
+
+Nous tronquons la série pour les années 2022 et 2023, que nous cherchons ensuite à prévoir en utilisant l'historique de 2015 à 2021. Estimons donc notre modèle sur cette série tronquée.
+
+```{r}
+#Série temporelle jusqu'à 2022
+data_tronc = window(monthly_data_Poland_ts,end=c(2021,12))
+#Serie temporelle en 2023
+data_a_prevoir = window(monthly_data_Poland_ts,start=c(2022,1),end=c(2023,12))
+
+model_3_tronc = Arima(data_tronc,order = c(0, 1, 1),list(order=c(0,1,1),period=12), method = "CSS-ML")
+
+summary(model_3_tronc)
+
+```
+
+Vérifions que ce modèle est toujours convenable sur la série tronquée, c'est-à-dire que les résidus peuvent toujours être considérés comme un bruit blanc.
+
+**Autocorrélation des résidus**
+
+Nous effectuons le test de Ljung-Box sur les résidus du modèle.
+
+```{r}
+resultat = data.frame(Order = integer(),Statistic_test=numeric(),P_valeur=numeric())
+
+#Application du test de Ljung-Box pour différent ordre
+
+for (i in 1:12)
+{
+  test_resultat = Box.test(model_3_tronc$residuals,lag = i*6,type = "Ljung-Box")
+  resultat = rbind(resultat,data.frame(Order=i*6,Statistic_test = test_resultat$statistic,P_valeur = test_resultat$p.value))
+}
+
+resultat
+```
+
+Pour ces différents retards, nous constatons que les p-valeurs ne sont pas inférieures au seuil de 5%, donc nous ne pouvons pas rejeter l'hypothèse nulle selon laquelle les résidus ne sont pas autocorrélés.
+
+**Normalité du résidu sur la série tronqué**
+
+Procédons à l'exécution du test de **Shapiro-Wilk** :
+
+```{r}
+shapiro.test(model_3_tronc$residuals)
+```
+
+Nous obtenons une p-valeur de 0.4397, qui est supérieure au seuil de 5%, donc nous ne pouvons pas rejeter l'hypothèse nulle (H0). Ainsi, nous considérons que le test de normalité est vérifié.
+
+**Homoscédascticité :**
+
+Procédons à l'exécution du test de **Breusch-Pagan** :
+
+```{r}
+residu=model_3_tronc$residuals
+test_bp = bptest(residu~fitted(model_3_tronc)+I(fitted(model_3_tronc)^2),data = data.frame(residu,fitted(model_3_tronc)))
+
+print(test_bp)
+```
+
+La p-valeur est de 0.2107, ce qui est supérieur au seuil de 5% fixé pour le niveau de test, donc nous ne pouvons pas rejeter l'hypothèse nulle (H0). Nous pouvons donc conclure à l'homoscédasticité des résidus de ce modèle tronqué.
+
+**Visualisons l'acf des résidus**
+
+```{r}
+acf_r=acf(model_3_tronc$residuals,plot=FALSE)
+acf_r$lag = acf_r$lag * 12
+
+plot(acf_r,ylim = c(-1, 1),main="Résidus modèle tronqué")
+```
+
+Nous observons sur cette sortie ACF qu’il n’y a aucun pic significatif, ce qui me permet de conclure à l'homoscédasticité des résidus et de confirmer qu'ils constituent un bruit blanc.
+
+Nous superposons maintenant les données des années 2022 et 2023 avec les prévisions obtenues à partir de l'historique de 2015 à 2021.
+
+```{r}
+pred_model_3_tronc = forecast(model_3_tronc,h=24,level = 95)
+
+
+pred_tronc = ts(pred_model_3_tronc$mean,start = c(2022,1),frequency = 12)
+
+pred_l_tronc = ts(pred_model_3_tronc$lower,start = c(2022,1),frequency = 12)
+
+pred_u_tronc = ts(pred_model_3_tronc$upper,start = c(2022,1),frequency = 12)
+
+#ts.plot(data_a_prevoir)
+ts.plot(data_a_prevoir,pred_tronc,pred_u_tronc,pred_l_tronc,xlab='t',ylab='Prix ',main="Prix mensuel moyen de l'électricité",col=c(1,2,3,3),lty=c(1,1,2,2),lwd=c(3,3,2,2))
+
+legend("topleft",legend=c("X","X_prev"),col=c(1,2,3,3),lty=c(1,1),lwd=c(3,3))
+legend("topright",legend=c("int95%_inf","int95%_sup"),col=c(3,3),lty=c(2,2),lwd=c(2,2))
+```
+
+Nous constatons que la prévision, représentée en rouge, est proche de la réalité, affichée en noir, et que l'intervalle de prévision englobe bien les réalisations observées.
+
+Cela renforce notre confiance en la qualité prédictive de notre modèle et des prévisions qui pourront s'ensuivre à partir du début de l'année 2024.
+
+#### Prévision pour l'année 2024 :
+
+Voici le graphe :
+
+```{r}
+pred_model=forecast(model_3,h=9,level=95)
+pred=(pred_model$mean*lambda + 1)^(1/lambda)
+pred_l=ts((pred_model$lower*lambda + 1)^(1/lambda),start=c(2024,4),frequency=12)
+pred_u=ts((pred_model$upper*lambda + 1)^(1/lambda),start=c(2024,4),frequency=12)
+
+ts.plot((monthly_data_Poland_ts*lambda + 1)^(1/lambda),pred,pred_l,pred_u,xlab="t",ylab="Prix (Euro/Mwhe)",col=c(1,2,3,3),lty=c(1,1,2,2),lwd=c(1,3,2,2),main="Prévision du prix moyen mensuel de l'électricité en Pologne")
+```
+
+En faisant un zoom sur la zone de prédiction on a :
+
+```{r}
+ts.plot(window((monthly_data_Poland_ts*lambda + 1)^(1/lambda),start=c(2023,11)),pred,pred_l,pred_u,xlab="t",ylab="Prix (Euro/Mwhe)",col=c(1,2,3,3),lty=c(1,1,2,2),lwd=c(1,3,2,2),main="Prévision du prix moyen mensuel de l'électricité en Pologne")
+```
+
+Voici donc les valeur prédites pour les périodes futures, accompagnées de leurs intervalles de confiance à 95% :
+
+```{r}
+# Calcul des prévisions et des intervalles de confiance après l'inversion de la transformation Box-Cox
+pred <- (pred_model$mean * lambda + 1)^(1 / lambda)
+pred_l <- (pred_model$lower[, "95%"] * lambda + 1)^(1 / lambda)
+pred_u <- (pred_model$upper[, "95%"] * lambda + 1)^(1 / lambda)
+
+# Création d'un DataFrame contenant les prédictions et les intervalles de confiance
+prediction_df <- data.frame(
+  Date = seq(from = as.Date("2024-04-01"), by = "month", length.out = 9),
+  Prediction = pred,
+  Lower_95_CI = pred_l,
+  Upper_95_CI = pred_u
+)
+
+# Afficher le DataFrame
+print(prediction_df)
+
+```
+
+**Conclusion :**
+
+Au terme de cet exercice 1, nous avons rencontré quelques défis et points à considérer. Le choix de convertir les prix agrégés par heure en moyenne mensuelle a été motivé par les difficultés rencontrées lors de la modélisation d'un modèle ARMA sur la série initiale. Celle-ci fluctuait considérablement et présentait une hétéroscédasticité conditionnelle, que le modèle ARMA ne pouvait pas adéquatement capturer. Ainsi, mon choix s'est porté sur une agrégation pour simplifier l'analyse.
+
+## Exercice II :
+
+## Importation et traitement des données
+
+Nous allons débuter par le chargement et la préparation de données relatives à la mortalité attribuable à la pollution, à la consommation énergétique par source, et aux données démographiques. Notre objectif est d'examiner la corrélation entre la mortalité et la consommation d'énergie par habitant. Pour ce faire, nous fusionnerons ces ensembles de données, renommerons les colonnes pertinentes, et calculerons la consommation d'énergie par habitant pour diverses sources énergétiques, tout en éliminant les données incomplètes.
+
+```{r}
+mortalite_pollution = read.csv("death-rate-from-air-pollution-per-100000.csv")
+
+
+conso_energie = read.csv("energy-consumption-by-source-and-country.csv")
+
+
+demographic_data = read.csv("population-and-demography.csv")
+
+
+colnames(mortalite_pollution)[4] = "Morta_100000"
+
+
+colnames(demographic_data)[1]="Entity"
+
+
+data = mortalite_pollution  %>% 
+  inner_join(demographic_data,by = join_by(Entity, Year))
+
+
+#Je renomme les colonnes
+col_nom = list("Geothermal_Biomass","Biofuels","Solaire","Heolienne","Hydro","Nucleaire","Gaz","Charbon","Petrole")
+colnames(conso_energie)[4:12] = col_nom
+
+
+#jointure
+data = data   %>% 
+  inner_join(conso_energie,by = join_by(Entity, Code, Year))
+
+
+# Liste des noms de colonnes à diviser par la colonne "Population"
+columns_to_divide <- c("Geothermal_Biomass", "Biofuels", "Solaire", "Heolienne", "Hydro", "Nucleaire", "Gaz", "Charbon", "Petrole")
+
+# Boucle pour diviser chaque colonne par la colonne "Population"
+for (col in columns_to_divide) {
+  new_col_name <- paste0(col, "_hbt")  # Nom de la nouvelle colonne
+  data[[new_col_name]] <- data[[col]] / data[["Population"]]
+}
+
+#Selection des colonnes utile pour la modelisation 
+data = data %>% dplyr::select('Entity','Year',"Morta_100000", "Geothermal_Biomass_hbt":"Petrole_hbt")
+
+
+data = na.omit(data)#Supprimer les valeurs manquantes
+
+head(data)
+```
+
+### Visualisation des données
+
+Avant de nous lancer dans la construction d'un modèle, nous allons examiner les données.
+
+Nous cherchons à déterminer s'il existe une corrélation entre les variables.
+
+Observons les nuages de points pour chaque paire de variables.
+
+```{r}
+par(mfrow = c(3, 3))  # Définit la disposition des graphiques
+types_energie <- names(data)[-1:-3]  # Exclure la première colonne de mortalité
+
+for (type in types_energie) {
+  plot(data[[type]], data$Morta_100000,
+       main = paste(type, "et Mortalité"),
+       xlab = "Consommation par habitant",
+       ylab = "Mortalité due à la pollution",
+       pch = 19, col = rgb(0.1, 0.1, 0.8, 0.5))
+}
+```
+
+Comme on peut le voir ci-dessus, les nuages de points pour chaque paire de variables entre la variable expliquée (Mortalité_pollution_par_hbt) et les variables explicatives ne montrent pas de relation linéaire claire. Certaines sources d'énergie, telles que le solaire et l'éolien, montrent des concentrations de points à faible consommation et faible mortalité, suggérant un impact moindre sur la pollution. À l'inverse, les combustibles fossiles comme le charbon et le pétrole présentent une dispersion plus large, ce qui pourrait indiquer une association plus forte avec des niveaux élevés de mortalité due à la pollution.
+
+Par conséquent, l'utilisation de transformations des variables peut s'avérer nécessaire.
+
+### Transformation des données :
+
+Il est nécessaire de transformer les données afin d'améliorer la linéarité des relations entre les variables.
+
+```{r warning=FALSE,message=FALSE}
+nuage_de_point = function(data,mapping,...){
+  ggplot(data=data,mapping = mapping)+
+    geom_jitter()
+}
+
+data %>% dplyr::select(-Entity,-Year) %>% 
+  ggpairs(lower=list(continuous=wrap(nuage_de_point))) + 
+  theme_bw()+
+  theme(panel.background = element_rect(fill = "gray97"))
+```
+
+Pour la variable d'intérêt, **Morta_100000**, les indicateurs de forme suggèrent une distribution asymétrique à gauche et étalée à droite. Dans ce cas, une transformation logarithmique semble être la meilleure solution.
+
+Pour les variables explicatives **Geothermal_Biomass_hbt, Biofuels_hbt, Solaire_hbt, Heolienne_hbt, Hydro_hbt, et Nucleaire_hbt**, les indicateurs de forme indiquent une distribution asymétrique à gauche, rendant une transformation par racine carrée appropriée.
+
+Quant aux variables explicatives **Gaz_hbt, Charbon_hbt, et Petrole_hbt**, l'analyse suggère une distribution asymétrique à gauche et étalée à droite, justifiant également l'utilisation d'une transformation logarithmique.
+
+Pour les transformations logarithmiques, étant donné que le logarithme de zéro n'est pas défini, nous ajusterons d'abord les valeurs en ajoutant $10^{-9}$.
+
+Procédons donc à ces transformations :
+
+```{r}
+data_transforme <- data
+
+# Racine carrée
+columns_to_sqrt <- c("Geothermal_Biomass_hbt", "Biofuels_hbt", "Solaire_hbt", "Heolienne_hbt", "Hydro_hbt", "Nucleaire_hbt")
+for (col in columns_to_sqrt) {
+  # Calcul de la racine carrée et sauvegarde dans la même colonne
+  data_transforme[[col]] <- sqrt(data_transforme[[col]])
+  #names(data_transforme)[names(data_transforme) == col] <- paste0("S_", col)
+}
+
+# Logarithmique
+columns_to_log <- c("Morta_100000", "Gaz_hbt", "Charbon_hbt", "Petrole_hbt")
+for (col in columns_to_log) {
+  # Calcul du logarithme naturel, ajustement pour éviter le log(0)
+  data_transforme[[col]] <- log(data_transforme[[col]] + 1e-9)
+  # Changement de nom de la colonne
+  #names(data_transforme)[names(data_transforme) == col] <- paste0("L_", col)
+}
+
+head(data_transforme)
+
+```
+
+Visualisons le nuage de points des données transformées :
+
+```{r}
+par(mfrow = c(3, 3))  # Définit la disposition des graphiques
+types_energie <- names(data_transforme)[-1:-3]  # Exclure la première colonne de mortalité
+
+#col_nom = c("S_Geothermal_Biomass_hbt", "S_Biofuels_hbt", "S_Solaire_hbt", "S_Heolienne_hbt", "S_Hydro_hbt", "S_Nucleaire_hbt", "L_Gaz_hbt", "L_Charbon_hbt", "L_Petrole_hbt")
+
+for (type in col_nom) {
+   type <- paste0(type, "_hbt") 
+  plot(data_transforme[[type]], data_transforme$Morta_100000,
+       main = paste(type, "et Mortalité"),
+       xlab = "Consommation par habitant",
+       ylab = "Mortalité due à la pollution",
+       pch = 19, col = rgb(0.1, 0.1, 0.8, 0.5))
+}
+```
+
+Sur ce nuage de points, la relation observée n’est plus aussi complexe qu'auparavant.
+
+### Modèle de régression linéaire
+
+```{r}
+model = lm(data = data_transforme,Morta_100000~.-Entity-Year)
+summary(model)
+```
+
+\
+Le modèle révèle un $R^{2}$ de 0.8117, ce qui signifie qu'il capture approximativement 81 % de la variabilité dans les données relatives à la mortalité attribuable à la pollution atmosphérique.
+
+Pour évaluer l'efficacité globale du modèle, nous utilisons un test F :
+
+-   **Hypothèse nulle (H0)** : Aucune des variables indépendantes n'influence la variable dépendante.
+
+-   **Hypothèse alternative (H1)** : Au moins une variable indépendante influence significativement la variable dépendante.
+
+Avec une statistique F de **642** sur 9 et **1340** degrés de liberté et une p-valeur bien en deçà de 2.2×10−16, bien inférieure au seuil de **5 %**, nous rejetons l'hypothèse nulle. Par conséquent, nous concluons que certaines des variables indépendantes ont un effet notable sur la mortalité due à la pollution de l'air.
+
+Concernant le test de significativité des coefficients individuels, nos hypothèses sont :
+
+-   **Hypothèse nulle (H0)** : Le coefficient d'une variable indépendante est égal à zéro, impliquant qu'elle n'a pas d'impact sur la variable dépendante.
+
+-   **Hypothèse alternative (H1)** : Le coefficient d'une variable indépendante est différent de zéro, suggérant un impact sur la variable dépendante.
+
+Dans l'évaluation de la significativité des coefficients du modèle, on utilise la distribution t de Student comme référence pour la statistique de test. Des variables telles que **Geothermal_Biomass_hbt, Heolienne_hbt, Gaz_hbt,Solaire_hbt, Charbon_hbt, Hydro_hbt et Petrole_hbt** présentent des p-valeurs inférieures au seuil de 5%, ce qui indique, qu'elles exercent une influence significative sur la mortalité attribuable à la pollution de l'air. À l'opposé, les variables Biofuel_hbt et Nucleaire_hbt, dont les p-valeurs dépassent le seuil de 5%, ne semblent pas avoir d'effet significatif sur la mortalité causée par la pollution de l'air.
+
+Voici une interprétation pratique des coefficients estimés :
+
+-   **Geothermal_Biomass_hbt (transformée par racine carrée):**
+
+    Pour chaque augmentation d'une unité de la racine carrée de Geothermal_Biomass_hbt, log de Morta_100000 est attendu de diminuer de 506.5 unités, toutes choses égales par ailleurs. Ce coefficient est statistiquement significatif.
+
+-   **Biofuels_hbt (transformée par racine carrée):**
+
+    Pour chaque augmentation d'une unité de la racine carrée de Biofuels_hbt, log de Morta_100000 est attendu d'augmenter de 25.54 unités, toutes choses égales par ailleurs. Cependant, cette variable n'est pas statistiquement significative puisque la valeur p est supérieure à 0.05.
+
+-   **Solaire_hbt et Heloienne_hbt (transformées par racine carrée):**
+
+    Pour chaque augmentation d'une unité de la racine carrée de Solaire_hbt, log de Morta_100000 est attendu de diminuer de 303.5 unités, toutes choses égales par ailleurs. Ce coefficient est statistiquement significatif.
+
+-   **Hydro_hbt (transformée par racine carrée):**
+
+    Pour chaque augmentation d'une unité de la racine carrée de Hydro_hbt, log de Morta_100000 est attendu de diminuer de 143 unités, toutes choses égales par ailleurs. Ce coefficient est statistiquement significatif.
+
+-   **Nucleaire_hbt (transformée par racine carrée):**
+
+    Pour chaque augmentation d'une unité de la racine carrée de Nucleaire_hbt, log de Morta_100000 est attendu d'augmenter de 10.38 unités, toutes choses égales par ailleurs. Ce coefficient n'est pas statistiquement significatif.
+
+-   **Gaz_hbt (transformée par logarithme):**
+
+    Si Gaz_hbt augmente de 1 (après transformation logarithmique), log de Morta_100000 est attendu de diminuer de 0.02591 unités, toutes choses égales par ailleurs. Ce coefficient est statistiquement significatif.
+
+-   **Charbon_hbt et Petrole_hbt (transformées par logarithme):**
+
+    Si Charbon_hbt augmente de 1 (après transformation logarithmique), log de Morta_100000 est attendu de diminuer de 157.4 unités, toutes choses égales par ailleurs. Ce coefficient est statistiquement significatif.
+
+-   **Petrole_hbt (transformées par logarithme)**: Si Petrole_hbt augmente de 1 (après transformation logarithmique), log de Morta_100000 est attendu de diminuer de 56.59 unités, toutes choses égales par ailleurs. Ce coefficient est statistiquement significatif.
+
+-   **Heolienne_hbt (transformée par racine carrée)**: Pour chaque augmentation d'une unité de la racine carrée de Heolienne_hbt, log de Morta_100000 est attendu de diminuer de 448.2 unités, toutes choses égales par ailleurs. Ce coefficient est statistiquement significatif.
+
+#### Elimination d'information redondante dans mon modèle
+
+Avant de procéder à la sélection du modèle, il est crucial de retirer toute redondance parmi les variables explicatives. Idéalement, ces variables devraient être indépendantes les unes des autres pour éviter des problèmes de multicollinéarité. Afin d'identifier et d'éliminer toute corrélation excessive entre elles, l'utilisation du facteur d'inflation de la variance (VIF) est recommandée. Un seuil VIF de 3 sera adopté pour déterminer l'indépendance adéquate entre les variables, en dessous duquel les variables seront considérées comme suffisamment indépendantes pour être incluses dans le modèle.
+
+```{r}
+vif(model)
+```
+
+Étant donné que les valeurs du facteur d'inflation de la variance (VIF) pour toutes les variables sont inférieures à 3, il est possible d'affirmer que le modèle ne présente pas de redondance informative significative. Autrement dit, les variables explicatives ne montrent pas de multicollinéarité notable, ce qui renforce la validité du modèle pour la poursuite des analyses.
+
+**Selection de modèle (backward) selon le critère d'information AIC**
+
+Nous allons maintenant entreprendre la sélection du modèle en utilisant la méthode de suppression progressive, ou "backward elimination". Cette approche consiste à commencer avec un modèle comprenant toutes les variables explicatives potentielles, puis à les éliminer une par une, en retirant à chaque étape la variable qui a le moins d'impact sur la performance du modèle, jusqu'à ce que seules les variables les plus significatives demeurent.
+
+```{r}
+step_backward <- step(model, direction = 'backward')
+```
+
+À l'issue de la sélection de modèle par élimination arrière, il apparaît que les variables **Biofuels_hbt et Nucleaire_hbt** ont été retirées. Nous disposons désormais d'un modèle épuré qui ne retient que les variables ayant le plus d'influence significative.
+
+```{r}
+model = step_backward
+summary(model)
+```
+
+Le $R^{2}$ de **0.8115** reste pratiquement inchangé, indiquant une forte capacité explicative du modèle final. Dans ce modèle, tous les coefficients sont statistiquement significatifs avec un seuil de confiance de 5%.
+
+Ainsi, nous avons élaboré un modèle de régression linéaire qui explique efficacement la mortalité due à la pollution de l'air en fonction de la consommation de certains types d'énergie. La prochaine étape consiste à valider ce modèle pour confirmer sa fiabilité et son applicabilité.
+
+### Validation de modèle
+
+Pour assurer la validité de notre modèle de régression linéaire, il est crucial de procéder à une analyse approfondie des résidus. Cette analyse comprend la vérification de la normalité des résidus, l'homoscédasticité (constance de la variance des résidus), et l'absence de corrélation entre eux. Il est également important d'identifier toute valeur aberrante ou point d'influence potentiel et, si possible, d'examiner ces éléments de plus près pour évaluer leur impact sur le modèle.
+
+-   **Normalité des résidus :**
+
+Examinons le graphique QQ des résidus pour évaluer leur distribution.
+
+```{r}
+qqnorm(model$residuals)
+qqline(model$residuals)
+```
+
+Le QQ-plot des résidus révèle des écarts par rapport à la ligne théorique, en particulier aux extrémités, ce qui suggère une possible non-normalité des résidus. Pour vérifier cette observation de manière formelle, nous allons procéder au test de Shapiro-Wilk :
+
+1.  **Hypothèse nulle (H0)** : Les résidus suivent une distribution normale.
+
+2.  **Hypothèse alternative (H1)** : Les résidus ne suivent pas une distribution normale.
+
+Ce test nous permettra de confirmer statistiquement si la normalité des résidus peut être assumée pour le modèle de régression.
+
+```{r}
+shapiro.test(model$residuals)
+```
+
+Nous obtenons une p-valeur inférieure à 5%, ce qui nous conduit à rejeter l'hypothèse nulle (H0). Par conséquent, nous concluons que les résidus ne suivent pas une distribution normale, indiquant que le test de normalité n'est pas satisfait pour ce modèle.
+
+-   **Homoscédascticité**
+
+Examinons le graphique des résidus par rapport aux valeurs prédites. Ce type de graphique est utile pour vérifier l'homoscédasticité des résidus, c'est-à-dire pour s'assurer que la variance des erreurs de prédiction reste constante à travers les valeurs prédites.
+
+```{r}
+# Calcul des résidus et des valeurs prédites
+residuals <- residuals(model)
+fitted_values <- fitted(model)
+
+# Graphique des résidus par rapport aux valeurs prédites
+plot(fitted_values, residuals, xlab = "Valeurs Prédites", ylab = "Résidus",
+     main = "Résidus vs Valeurs Prédites", pch = 20, col = "blue")
+abline(h = 0, lty = 2, col = "red")
+```
+
+Les résidus sont répartis de manière relativement uniforme autour de la ligne horizontale à zéro, sans montrer de tendance ou de motif particulier dans leur dispersion. Ce comportement suggère que les résidus de notre modèle sont homoscédastiques, c'est-à-dire que la variance des erreurs reste constante à travers les différentes valeurs prédites, ce qui est un bon indicateur de la fiabilité du modèle de régression.
+
+-   **Corrélation des résidus**
+
+\
+Pour évaluer l'indépendance des résidus, nous utiliserons le test de Durbin-Watson, qui est spécialement conçu pour détecter la présence d'autocorrélation sérielle à l'ordre 1 dans les résidus d'un modèle de régression linéaire.
+
+Les hypothèses du test de Durbin-Watson sont les suivantes :
+
+1.  **Hypothèse nulle (H0)** : Il n'y a pas d'autocorrélation des résidus.
+
+2.  **Hypothèse alternative (H1)** : Il existe une autocorrélation des résidus.
+
+```{r}
+dwtest(model)
+```
+
+Il semble que la p-valeur obtenue du test de **Durbin-Watson** soit inférieure à 5%, ce qui nous conduit à rejeter l'hypothèse nulle (H0). Ainsi, nous concluons que les résidus de notre modèle présentent une autocorrélation, indiquant que les résidus sont corrélés entre eux.
+
+Cela signifie qu'il existe de l'information dans les résidus que notre modèle actuel ne parvient pas à capturer.
+
+Les résidus de notre modèle ne respecte pas les hypothèses d'un modèle de régression linéaire.
+
+-   **Détection de valeurs aberrantes et de points influents (Cook's Distance )**
+
+**Détection des points aberrants ou outliers** :
+
+```{r}
+outliers = model %>% outlierTest()
+print(outliers)
+```
+
+On a donc un point aberrants au vu du seuil de significativité de 5%.
+
+```{r}
+outlier_data <- data[outliers$rstudent, ]
+outlier_data
+```
+
+Ce qui correspond à l'observation de l'argentine en 2013.
+
+**Détection des points influents :**
+
+```{r}
+influent = model %>% influencePlot()
+print(influent)
+```
+
+Nous constatons que tous les points influents identifiés ne sont pas nécessairement des valeurs aberrantes. Parmi eux, quatre se démarquent, et un seul est considéré comme un outlier.
+
+Face à cette observation, il est essentiel de se demander si ces anomalies proviennent d'erreurs dans la collecte des données ou si elles représentent des observations véridiques. Cette distinction est cruciale pour la validité et la fiabilité de notre analyse.
+
+### Conclusion :
+
+En conclusion, le modèle de régression linéaire que nous avons utilisé ne se révèle pas fiable, car il ne respecte pas les hypothèses fondamentales requises pour un modèle de régression linéaire. Les problèmes d'autocorrélation des résidus, de non-normalité et d'homoscédasticité non respectée indiquent que le modèle pourrait être amélioré ou qu'une autre approche de modélisation pourrait être nécessaire pour obtenir des résultats plus robustes et fiables.
